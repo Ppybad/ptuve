@@ -1,0 +1,13 @@
+.git
+.gitignore
+.vscode
+.idea
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.env
+downloads/
+frontend/node_modules/
+frontend/dist/
+docker/

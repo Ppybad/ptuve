@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+celery
+redis
+sqlalchemy
+psycopg2-binary
+yt-dlp
+pydantic
+pydantic-settings
+python-multipart
