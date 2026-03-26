@@ -8,3 +8,5 @@ yt-dlp
 pydantic
 pydantic-settings
 python-multipart
+tidalapi
+syncedlyrics

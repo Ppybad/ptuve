@@ -27,7 +27,7 @@ export default function DownloadTable({ items, onRetry, onDelete }: Props) {
         <table className="w-full text-sm min-w-[720px]">
           <thead className="bg-slate-50 text-slate-600 dark:bg-gray-900 dark:text-gray-300 uppercase text-xs">
             <tr>
-              <th className="text-left px-4 py-3">Título / URL</th>
+              <th className="text-left px-4 py-3">Título / Álbum</th>
               <th className="text-left px-4 py-3">Estado</th>
               <th className="text-left px-4 py-3 w-40">Acciones</th>
             </tr>
@@ -36,8 +36,27 @@ export default function DownloadTable({ items, onRetry, onDelete }: Props) {
             {items.map((t) => (
               <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-gray-900/60">
                 <td className="px-4 py-3">
-                  <div className="text-slate-900 dark:text-gray-100 truncate max-w-[600px]">{t.title || t.url}</div>
-                  <div className="text-xs text-slate-500 dark:text-gray-400">{new Date(t.created_at).toLocaleString()}</div>
+                  <div className="text-slate-900 dark:text-gray-100 truncate max-w-[600px]">
+                    {(t.title || t.url).split(' — ')[0]}
+                  </div>
+                  {(() => {
+                    const parts = (t.title || '').split(' — ')
+                    if (parts.length >= 2) {
+                      const album = parts[1]
+                      const artist = parts[2]
+                      return (
+                        <div className="text-xs text-slate-500 dark:text-gray-400">
+                          {album && <span className="mr-2">Álbum: {album}</span>}
+                          {artist && <span>Artista: {artist}</span>}
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="text-xs text-slate-500 dark:text-gray-400">
+                        {new Date(t.created_at).toLocaleString()}
+                      </div>
+                    )
+                  })()}
                 </td>
                 <td className="px-4 py-3">
                   <StatusBadge status={t.status} />

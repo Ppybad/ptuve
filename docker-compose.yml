@@ -6,6 +6,7 @@ services:
     platform: linux/amd64
     volumes:
       - downloads_data:/downloads
+      - ./backend/data:/app/data
     env_file:
       - .env
     depends_on:
@@ -23,6 +24,7 @@ services:
     platform: linux/amd64
     volumes:
       - downloads_data:/downloads
+      - ./backend/data:/app/data
     env_file:
       - .env
     depends_on:

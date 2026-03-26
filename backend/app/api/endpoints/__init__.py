@@ -9,6 +9,7 @@ from sqlalchemy import func, or_
 from backend.app.core.database import get_db
 from backend.app.models.download import DownloadTask, DownloadStatus
 from backend.app.tasks.download_tasks import download_task
+from backend.app.core.tidal_auth import tidal_status
 
 router = APIRouter()
 
@@ -100,4 +101,16 @@ def get_download_file(task_id: uuid.UUID, db: Session = Depends(get_db)):
     if not task.file_path or not os.path.isfile(task.file_path):
         raise HTTPException(status_code=404)
     filename = os.path.basename(task.file_path)
-    return FileResponse(task.file_path, media_type="audio/mp4", filename=filename)
+    ext = os.path.splitext(filename)[1].lower()
+    media_type = "application/octet-stream"
+    if ext == ".mp3":
+        media_type = "audio/mpeg"
+    elif ext == ".m4a" or ext == ".aac":
+        media_type = "audio/mp4"
+    elif ext == ".flac":
+        media_type = "audio/flac"
+    return FileResponse(task.file_path, media_type=media_type, filename=filename)
+
+@router.get("/tidal/status")
+def get_tidal_status() -> Dict[str, str]:
+    return {"status": tidal_status()}
