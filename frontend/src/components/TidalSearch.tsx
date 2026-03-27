@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { searchTidal, enqueueTidalDownload, getTidalLogin, getTidalStatus, type TidalItem, type TidalType } from '../api/tidal'
-import { Search, Download as DownloadIcon, Disc, User } from 'lucide-react'
+import { searchTidal, enqueueTidalDownload, getTidalLogin, getTidalStatus, getTidalMe, logoutTidal, type TidalItem, type TidalType } from '../api/tidal'
+import { Search, Download as DownloadIcon, User, UserCircle, Check, Music, Album } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 
 export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
@@ -11,6 +11,8 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
   const [awaitingAuth, setAwaitingAuth] = useState(false)
   const [loginLink, setLoginLink] = useState<string | null>(null)
   const [loginCode, setLoginCode] = useState<string | null>(null)
+  const [tidalStatus, setTidalStatus] = useState<'connected' | 'awaiting_authorization'>('awaiting_authorization')
+  const [tidalUserName, setTidalUserName] = useState<string | null>(null)
 
   const doSearch = useCallback(async () => {
     const q = query.trim()
@@ -19,9 +21,6 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
     try {
       const items = await searchTidal(q, type)
       setResults(items)
-      setAwaitingAuth(false)
-      setLoginLink(null)
-      setLoginCode(null)
     } catch (e: any) {
       setResults([])
       const msg = e?.response?.data?.detail || 'No se pudo buscar en Tidal'
@@ -50,6 +49,7 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
     const id = setInterval(async () => {
       try {
         const st = await getTidalStatus()
+        setTidalStatus(st.status)
         if (st.status === 'connected') {
           setAwaitingAuth(false)
           setLoginLink(null)
@@ -57,9 +57,45 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
           toast.success('Tidal conectado')
         }
       } catch {}
-    }, 5000)
+    }, 2000)
     return () => clearInterval(id)
   }, [awaitingAuth])
+
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const st = await getTidalStatus()
+        if (!cancelled) setTidalStatus(st.status)
+      } catch {}
+    }
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tidalStatus !== 'connected') {
+      setTidalUserName(null)
+      return
+    }
+    let cancelled = false
+    const run = async () => {
+      try {
+        const me = await getTidalMe()
+        if (!cancelled) setTidalUserName(me.name || null)
+      } catch {
+        if (!cancelled) setTidalUserName(null)
+      }
+    }
+    run()
+    return () => {
+      cancelled = true
+    }
+  }, [tidalStatus])
 
   const makeAbsolute = (link?: string | null) => {
     if (!link) return null
@@ -113,10 +149,8 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
                 onClick={async () => {
                   try {
                     const st = await getTidalStatus()
+                    setTidalStatus(st.status)
                     if (st.status === 'connected') {
-                      setAwaitingAuth(false)
-                      setLoginLink(null)
-                      setLoginCode(null)
                       toast.success('Tidal conectado')
                     } else {
                       toast('Sigue pendiente de autorización')
@@ -133,6 +167,53 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
           </div>
         </div>
       )}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-sm text-slate-700 dark:text-gray-300">
+          {tidalStatus === 'connected' ? (
+            <>
+              <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 flex items-center justify-center">
+                <UserCircle size={18} className="text-slate-600 dark:text-gray-300" />
+              </div>
+              <div className="flex flex-col leading-tight">
+                <div className="flex items-center gap-1">
+                  <span className="font-medium">{tidalUserName ? `Hola, ${tidalUserName} (Tidal HiFi)` : 'Tidal Conectado'}</span>
+                  <Check size={16} className="text-blue-600" />
+                </div>
+                <div className="text-xs text-slate-500 dark:text-gray-500">Sesión iniciada</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 flex items-center justify-center">
+                <UserCircle size={18} className="text-slate-400 dark:text-gray-600" />
+              </div>
+              <div className="font-medium">Sin conexión</div>
+            </>
+          )}
+        </div>
+        {tidalStatus === 'connected' && (
+          <button
+            onClick={async () => {
+              try {
+                await logoutTidal()
+                setResults([])
+                setTidalStatus('awaiting_authorization')
+                setAwaitingAuth(true)
+                setLoginLink(null)
+                setLoginCode(null)
+                setTidalUserName(null)
+                toast.success('Sesión de Tidal cerrada')
+              } catch (e: any) {
+                const msg = e?.response?.data?.detail || 'No se pudo cerrar sesión'
+                toast.error(msg)
+              }
+            }}
+            className="px-3 py-2 rounded-md bg-red-600 text-white hover:bg-red-500 transition-colors"
+          >
+            Cerrar Sesión
+          </button>
+        )}
+      </div>
       <div className="flex items-center gap-2 mb-4">
         <div className="relative flex-1">
           <input
@@ -165,6 +246,28 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {loading &&
+          Array.from({ length: 8 }).map((_, idx) => (
+            <div
+              key={`sk-${idx}`}
+              className="rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-950 shadow-sm dark:shadow-none overflow-hidden transition-colors animate-pulse"
+            >
+              <div className="aspect-square bg-slate-100 dark:bg-gray-900 flex items-center justify-center">
+                {type === 'track' ? (
+                  <Music className="text-slate-300 dark:text-gray-700" size={48} />
+                ) : type === 'album' ? (
+                  <Album className="text-slate-300 dark:text-gray-700" size={48} />
+                ) : (
+                  <User className="text-slate-300 dark:text-gray-700" size={48} />
+                )}
+              </div>
+              <div className="p-3 space-y-2">
+                <div className="h-4 rounded bg-slate-200 dark:bg-gray-800 w-3/4" />
+                <div className="h-3 rounded bg-slate-200 dark:bg-gray-800 w-1/2" />
+                <div className="h-8 rounded bg-slate-200 dark:bg-gray-800 w-full mt-3" />
+              </div>
+            </div>
+          ))}
         {results.map((item) => (
           <div
             key={`${type}-${item.id}`}
@@ -179,7 +282,15 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
                   loading="lazy"
                 />
               ) : (
-                <Disc className="text-slate-400 dark:text-gray-600" size={48} />
+                <>
+                  {type === 'track' ? (
+                    <Music className="text-slate-400 dark:text-gray-600" size={48} />
+                  ) : type === 'album' ? (
+                    <Album className="text-slate-400 dark:text-gray-600" size={48} />
+                  ) : (
+                    <User className="text-slate-400 dark:text-gray-600" size={48} />
+                  )}
+                </>
               )}
             </div>
             <div className="p-3">

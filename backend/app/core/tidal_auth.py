@@ -4,9 +4,57 @@ import threading
 from pathlib import Path
 from typing import Literal, Optional, Tuple
 
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+if load_dotenv:
+    load_dotenv()
+
 SESSION_DIR = Path("/app/data")
 SESSION_FILE = SESSION_DIR / "tidal_session.json"
 LOGIN_LINK_FILE = SESSION_DIR / "LOGIN_LINK.txt"
+_CACHED_SESSION = None
+_SESSION_LOCK = threading.Lock()
+
+def _create_session(tidalapi):
+    client_id = os.getenv("TIDAL_CLIENT_ID")
+    client_secret = os.getenv("TIDAL_CLIENT_SECRET")
+    if client_id or client_secret:
+        kwargs: dict = {}
+        if client_id:
+            kwargs["client_id"] = client_id
+        if client_secret:
+            kwargs["client_secret"] = client_secret
+        try:
+            return tidalapi.Session(**kwargs)
+        except TypeError:
+            pass
+        except Exception:
+            pass
+    return tidalapi.Session()
+
+def _apply_client_overrides(session) -> None:
+    client_id = os.getenv("TIDAL_CLIENT_ID")
+    client_secret = os.getenv("TIDAL_CLIENT_SECRET")
+    if not client_id and not client_secret:
+        return
+    try:
+        client = getattr(session, "client", None)
+        if client is not None:
+            if client_id and hasattr(client, "client_id"):
+                setattr(client, "client_id", client_id)
+            if client_secret and hasattr(client, "client_secret"):
+                setattr(client, "client_secret", client_secret)
+    except Exception:
+        pass
+    try:
+        if client_id and hasattr(session, "client_id"):
+            setattr(session, "client_id", client_id)
+        if client_secret and hasattr(session, "client_secret"):
+            setattr(session, "client_secret", client_secret)
+    except Exception:
+        pass
 
 def _save_session(session) -> None:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
@@ -18,6 +66,23 @@ def _save_session(session) -> None:
     }
     with open(SESSION_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f)
+
+def _delete_saved_session_file() -> None:
+    try:
+        if SESSION_FILE.exists():
+            SESSION_FILE.unlink()
+    except Exception:
+        pass
+
+def _is_auth_error(err: Exception) -> bool:
+    try:
+        msg = (repr(err) or "").lower()
+    except Exception:
+        msg = ""
+    for token in ("401", "unauthorized", "forbidden", "token", "expired", "invalid_grant"):
+        if token in msg:
+            return True
+    return False
 
 def _load_session_into(session) -> bool:
     if not SESSION_FILE.exists():
@@ -45,6 +110,7 @@ def _write_login_link(text: str) -> None:
         pass
 
 def ensure_session_and_start_device_login_if_needed(printer=print) -> Literal["connected", "awaiting_authorization"]:
+    global _CACHED_SESSION
     try:
         import tidalapi
     except Exception as e:
@@ -54,7 +120,11 @@ def ensure_session_and_start_device_login_if_needed(printer=print) -> Literal["c
         except Exception:
             pass
         return "awaiting_authorization"
-    session = tidalapi.Session()
+    with _SESSION_LOCK:
+        if _CACHED_SESSION is None:
+            _CACHED_SESSION = _create_session(tidalapi)
+        session = _CACHED_SESSION
+    _apply_client_overrides(session)
     if _load_session_into(session):
         return "connected"
     try:
@@ -99,10 +169,20 @@ def ensure_session_and_start_device_login_if_needed(printer=print) -> Literal["c
         def _wait_and_persist():
             try:
                 future.result()
-                _save_session(session)
-                print("Tidal: sesión almacenada", flush=True)
                 try:
-                    printer("Tidal: sesión almacenada")
+                    if hasattr(session, "save_session"):
+                        session.save_session(str(SESSION_FILE))
+                    else:
+                        _save_session(session)
+                    print(f"[TIDAL] Sesión guardada físicamente en {SESSION_FILE}", flush=True)
+                except Exception as ex:
+                    print(f"[TIDAL] Error guardando sesión: {ex}", flush=True)
+                    _save_session(session)
+                    print(f"[TIDAL] Sesión guardada físicamente en {SESSION_FILE}", flush=True)
+                global _CACHED_SESSION
+                _CACHED_SESSION = session
+                try:
+                    printer(f"[TIDAL] Sesión guardada físicamente en {SESSION_FILE}")
                 except Exception:
                     pass
             except Exception as ex:
@@ -122,29 +202,73 @@ def ensure_session_and_start_device_login_if_needed(printer=print) -> Literal["c
         return "awaiting_authorization"
 
 def tidal_status() -> Literal["connected", "awaiting_authorization"]:
-    return "connected" if SESSION_FILE.exists() else "awaiting_authorization"
+    global _CACHED_SESSION
+    if not SESSION_FILE.exists():
+        _CACHED_SESSION = None
+        return "awaiting_authorization"
+    if _CACHED_SESSION is not None:
+        try:
+            if _CACHED_SESSION.check_login():
+                return "connected"
+            _CACHED_SESSION = None
+            _delete_saved_session_file()
+            return "awaiting_authorization"
+        except Exception as ex:
+            if _is_auth_error(ex):
+                _CACHED_SESSION = None
+                _delete_saved_session_file()
+                return "awaiting_authorization"
+            return "connected"
+    return "connected" if refresh_session_if_needed() else "awaiting_authorization"
 
 def get_tidal_session():
+    global _CACHED_SESSION
     try:
         import tidalapi
     except Exception:
         return None
-    session = tidalapi.Session()
+    with _SESSION_LOCK:
+        if _CACHED_SESSION is None:
+            _CACHED_SESSION = _create_session(tidalapi)
+        session = _CACHED_SESSION
+    _apply_client_overrides(session)
     if _load_session_into(session):
-        try:
-            ok = session.check_login()
-            if ok:
-                return session
-        except Exception:
+        return session
+    return session if getattr(session, "access_token", None) else None
+
+def logout_tidal_session() -> None:
+    global _CACHED_SESSION
+    with _SESSION_LOCK:
+        _CACHED_SESSION = None
+    _delete_saved_session_file()
+
+def refresh_session_if_needed():
+    session = get_tidal_session()
+    if not session:
+        return None
+    try:
+        ok = session.check_login()
+        if ok:
             return session
-    return None
+        logout_tidal_session()
+        return None
+    except Exception as ex:
+        if _is_auth_error(ex):
+            logout_tidal_session()
+            return None
+        return session
 
 def start_device_login() -> Optional[Tuple[str, Optional[str]]]:
     try:
         import tidalapi
     except Exception:
         return None
-    session = tidalapi.Session()
+    global _CACHED_SESSION
+    with _SESSION_LOCK:
+        if _CACHED_SESSION is None:
+            _CACHED_SESSION = _create_session(tidalapi)
+        session = _CACHED_SESSION
+    _apply_client_overrides(session)
     if _load_session_into(session):
         return None
     try:
@@ -171,8 +295,18 @@ def start_device_login() -> Optional[Tuple[str, Optional[str]]]:
         def _wait_and_persist():
             try:
                 future.result()
-                _save_session(session)
-                print("Tidal: sesión almacenada", flush=True)
+                try:
+                    if hasattr(session, "save_session"):
+                        session.save_session(str(SESSION_FILE))
+                    else:
+                        _save_session(session)
+                    print(f"[TIDAL] Sesión guardada físicamente en {SESSION_FILE}", flush=True)
+                except Exception as ex:
+                    print(f"[TIDAL] Error guardando sesión: {ex}", flush=True)
+                    _save_session(session)
+                    print(f"[TIDAL] Sesión guardada físicamente en {SESSION_FILE}", flush=True)
+                global _CACHED_SESSION
+                _CACHED_SESSION = session
             except Exception as ex:
                 print(f"Tidal: error de autorización: {ex}", flush=True)
         threading.Thread(target=_wait_and_persist, daemon=True).start()

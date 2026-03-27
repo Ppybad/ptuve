@@ -1,0 +1,9 @@
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+**/__pycache__/
+*.py[cod]
+
+backend/data/tidal_session.json
+backend/data/LOGIN_LINK.txt

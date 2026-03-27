@@ -1,5 +1,6 @@
 import os
 import uuid
+from pathlib import Path
 from typing import List, Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -9,7 +10,6 @@ from sqlalchemy import func, or_
 from backend.app.core.database import get_db
 from backend.app.models.download import DownloadTask, DownloadStatus
 from backend.app.tasks.download_tasks import download_task
-from backend.app.core.tidal_auth import tidal_status
 
 router = APIRouter()
 
@@ -113,4 +113,4 @@ def get_download_file(task_id: uuid.UUID, db: Session = Depends(get_db)):
 
 @router.get("/tidal/status")
 def get_tidal_status() -> Dict[str, str]:
-    return {"status": tidal_status()}
+    return {"status": "connected" if Path("/app/data/tidal_session.json").exists() else "awaiting_authorization"}

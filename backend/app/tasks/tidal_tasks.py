@@ -165,9 +165,17 @@ def tidal_download_track(task_id: str, track_id: int) -> None:
                 url = share
         out_dir = settings.downloads_dir
         os.makedirs(out_dir, exist_ok=True)
+        try:
+            os.chmod(out_dir, 0o777)
+        except Exception:
+            pass
         template = os.path.join(out_dir, "%(title)s.%(ext)s")
         before = set(os.listdir(out_dir))
         access_token = getattr(session, "access_token", None)
+        if access_token:
+            print(f"[DOWNLOAD DEBUG] Iniciando descarga de track {track_id} con token {access_token[:10]}....", flush=True)
+        else:
+            print(f"[DOWNLOAD DEBUG] Iniciando descarga de track {track_id} con token None", flush=True)
         cmd: List[str] = [
             "yt-dlp",
             "-x",

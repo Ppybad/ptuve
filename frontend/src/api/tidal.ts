@@ -33,3 +33,13 @@ export async function getTidalStatus(): Promise<{ status: 'connected' | 'awaitin
   const { data } = await apiClient.get('/tidal/status')
   return data
 }
+
+export async function logoutTidal(): Promise<{ status: string }> {
+  const { data } = await apiClient.post('/tidal/logout')
+  return data
+}
+
+export async function getTidalMe(): Promise<{ name?: string | null; country?: string | null }> {
+  const { data } = await apiClient.get('/tidal/me')
+  return data
+}

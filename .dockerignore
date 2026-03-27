@@ -7,6 +7,8 @@ __pycache__/
 *.pyo
 .DS_Store
 .env
+data/tidal_session.json
+data/
 downloads/
 frontend/node_modules/
 frontend/dist/

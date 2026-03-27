@@ -10,3 +10,4 @@ pydantic-settings
 python-multipart
 tidalapi
 syncedlyrics
+python-dotenv
