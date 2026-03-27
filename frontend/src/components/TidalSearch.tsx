@@ -309,7 +309,7 @@ export default function TidalSearch({ onQueued }: { onQueued?: () => void }) {
                   title="Descargar"
                 >
                   <DownloadIcon size={16} />
-                  Descargar
+                  {type === 'album' ? 'Descargar Álbum' : 'Descargar'}
                 </button>
               </div>
             </div>

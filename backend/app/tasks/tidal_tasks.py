@@ -1,18 +1,25 @@
 import os
 import uuid
 import subprocess
-from typing import Optional, List
+from typing import Optional, List, Set
 from backend.app.core.celery_app import celery_app
 from backend.app.core.database import SessionLocal
 from backend.app.models.download import DownloadTask, DownloadStatus
 from backend.app.core.config import settings
 from backend.app.core.tidal_auth import get_tidal_session
 
-def _find_new_file(before: set, folder: str, exts: List[str]) -> Optional[str]:
-    after = set(os.listdir(folder))
+def _list_files_recursive(root: str) -> Set[str]:
+    found: Set[str] = set()
+    for base, _dirs, files in os.walk(root):
+        for f in files:
+            rel = os.path.relpath(os.path.join(base, f), root)
+            found.add(rel)
+    return found
+
+def _find_new_file(before: Set[str], folder: str, exts: List[str]) -> Optional[str]:
+    after = _list_files_recursive(folder)
     created = [f for f in (after - before) if any(f.lower().endswith(ext) for ext in exts)]
     if not created:
-        # fallback: guess most recent by mtime
         candidates = [os.path.join(folder, f) for f in after]
         if not candidates:
             return None
@@ -163,22 +170,25 @@ def tidal_download_track(task_id: str, track_id: int) -> None:
             share = getattr(t, "listen_url", None) or getattr(t, "share_url", None)
             if share:
                 url = share
-        out_dir = settings.downloads_dir
+        out_dir = os.path.join(settings.downloads_dir, "Tidal")
         os.makedirs(out_dir, exist_ok=True)
         try:
             os.chmod(out_dir, 0o777)
         except Exception:
             pass
-        template = os.path.join(out_dir, "%(title)s.%(ext)s")
-        before = set(os.listdir(out_dir))
+        template = os.path.join(out_dir, "%(artist)s/%(album)s/%(track_number)02d - %(title)s.%(ext)s")
+        before = _list_files_recursive(out_dir)
         access_token = getattr(session, "access_token", None)
         if access_token:
             print(f"[DOWNLOAD DEBUG] Iniciando descarga de track {track_id} con token {access_token[:10]}....", flush=True)
         else:
             print(f"[DOWNLOAD DEBUG] Iniciando descarga de track {track_id} con token None", flush=True)
+        print(f"[DOWNLOAD START] Bajando: {title or str(track_id)} | Formato: FLAC", flush=True)
         cmd: List[str] = [
             "yt-dlp",
             "-x",
+            "--audio-quality",
+            "0",
             "--audio-format",
             "flac",
             "--write-subs",
@@ -190,7 +200,7 @@ def tidal_download_track(task_id: str, track_id: int) -> None:
         ]
         if access_token:
             cmd += ["--add-header", f"Authorization: Bearer {access_token}"]
-        cmd += ["-o", template, url]
+        cmd += ["--output-na-placeholder", "00", "-o", template, url]
         try:
             res = subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError:
@@ -243,5 +253,46 @@ def tidal_download_track(task_id: str, track_id: int) -> None:
             task.status = DownloadStatus.FAILED
         db.add(task)
         db.commit()
+    finally:
+        db.close()
+
+@celery_app.task(name="tidal_enqueue_album")
+def tidal_enqueue_album(album_id: int) -> None:
+    db = SessionLocal()
+    try:
+        session = get_tidal_session()
+        if not session:
+            return
+        try:
+            album = session.get_album(album_id)
+            tracks = album.tracks(limit=500)
+        except Exception:
+            return
+        album_name = getattr(album, "name", None) or getattr(album, "title", None)
+        for tr in tracks:
+            try:
+                track_id = int(getattr(tr, "id", -1))
+                if track_id <= 0:
+                    continue
+                track_title = getattr(tr, "name", None) or getattr(tr, "title", None)
+                artist_name = None
+                if hasattr(tr, "artist") and tr.artist and hasattr(tr.artist, "name"):
+                    artist_name = tr.artist.name
+                elif hasattr(tr, "artists") and tr.artists and tr.artists and hasattr(tr.artists[0], "name"):
+                    artist_name = tr.artists[0].name
+                title = None
+                if track_title and (album_name or artist_name):
+                    parts = [track_title, album_name or "", artist_name or ""]
+                    title = " — ".join([p for p in parts if p])
+                else:
+                    title = track_title
+                url = f"tidal:track:{track_id}"
+                task = DownloadTask(url=url, title=title, status=DownloadStatus.PENDING)
+                db.add(task)
+                db.commit()
+                db.refresh(task)
+                tidal_download_track.delay(str(task.id), track_id)
+            except Exception:
+                continue
     finally:
         db.close()

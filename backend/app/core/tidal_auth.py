@@ -17,6 +17,25 @@ LOGIN_LINK_FILE = SESSION_DIR / "LOGIN_LINK.txt"
 _CACHED_SESSION = None
 _SESSION_LOCK = threading.Lock()
 
+def _scopes_for_tv_app(tidalapi):
+    try:
+        Scopes = getattr(tidalapi, "Scopes", None) or getattr(tidalapi, "scopes", None)
+    except Exception:
+        Scopes = None
+    desired = ("OFFLINE_CONTROL", "STREAM_HIFI")
+    if Scopes is not None:
+        vals = []
+        for name in desired:
+            try:
+                v = getattr(Scopes, name, None)
+                if v is not None:
+                    vals.append(v)
+            except Exception:
+                continue
+        if vals:
+            return vals
+    return list(desired)
+
 def _create_session(tidalapi):
     client_id = os.getenv("TIDAL_CLIENT_ID")
     client_secret = os.getenv("TIDAL_CLIENT_SECRET")
@@ -56,6 +75,15 @@ def _apply_client_overrides(session) -> None:
     except Exception:
         pass
 
+def _session_has_empty_scopes(session) -> bool:
+    try:
+        scopes_val = getattr(session, "scopes", None)
+    except Exception:
+        scopes_val = None
+    if isinstance(scopes_val, (list, tuple, set)) and len(scopes_val) == 0:
+        return True
+    return False
+
 def _save_session(session) -> None:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     data = {
@@ -63,6 +91,7 @@ def _save_session(session) -> None:
         "access_token": getattr(session, "access_token", None),
         "refresh_token": getattr(session, "refresh_token", None),
         "expiry_time": getattr(session, "expiry_time", None),
+        "client_id": os.getenv("TIDAL_CLIENT_ID") or getattr(session, "client_id", None) or None,
     }
     with open(SESSION_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f)
@@ -73,6 +102,23 @@ def _delete_saved_session_file() -> None:
             SESSION_FILE.unlink()
     except Exception:
         pass
+
+def _get_saved_client_id() -> Optional[str]:
+    if not SESSION_FILE.exists():
+        return None
+    try:
+        with open(SESSION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cid = data.get("client_id")
+        return cid
+    except Exception:
+        return None
+
+def _purge_if_client_changed() -> None:
+    env_id = os.getenv("TIDAL_CLIENT_ID")
+    saved = _get_saved_client_id()
+    if env_id and saved and env_id != saved:
+        _delete_saved_session_file()
 
 def _is_auth_error(err: Exception) -> bool:
     try:
@@ -125,15 +171,33 @@ def ensure_session_and_start_device_login_if_needed(printer=print) -> Literal["c
             _CACHED_SESSION = _create_session(tidalapi)
         session = _CACHED_SESSION
     _apply_client_overrides(session)
+    _purge_if_client_changed()
     if _load_session_into(session):
-        return "connected"
+        if _session_has_empty_scopes(session):
+            _delete_saved_session_file()
+        else:
+            return "connected"
     try:
         login = None
         future = None
         if hasattr(session, "login_oauth_device"):
-            login, future = session.login_oauth_device()
+            scopes = _scopes_for_tv_app(tidalapi)
+            try:
+                login, future = session.login_oauth_device(scopes=scopes)
+            except TypeError:
+                try:
+                    login, future = session.login_oauth_device(scopes)
+                except Exception:
+                    login, future = session.login_oauth_device()
         elif hasattr(session, "login_oauth"):
-            login, future = session.login_oauth()
+            scopes = _scopes_for_tv_app(tidalapi)
+            try:
+                login, future = session.login_oauth(scopes=scopes)
+            except TypeError:
+                try:
+                    login, future = session.login_oauth(scopes)
+                except Exception:
+                    login, future = session.login_oauth()
         else:
             return "awaiting_authorization"
         try:
@@ -208,6 +272,10 @@ def tidal_status() -> Literal["connected", "awaiting_authorization"]:
         return "awaiting_authorization"
     if _CACHED_SESSION is not None:
         try:
+            if _session_has_empty_scopes(_CACHED_SESSION):
+                _CACHED_SESSION = None
+                _delete_saved_session_file()
+                return "awaiting_authorization"
             if _CACHED_SESSION.check_login():
                 return "connected"
             _CACHED_SESSION = None
@@ -232,7 +300,11 @@ def get_tidal_session():
             _CACHED_SESSION = _create_session(tidalapi)
         session = _CACHED_SESSION
     _apply_client_overrides(session)
+    _purge_if_client_changed()
     if _load_session_into(session):
+        if _session_has_empty_scopes(session):
+            _delete_saved_session_file()
+            return None
         return session
     return session if getattr(session, "access_token", None) else None
 
@@ -269,15 +341,32 @@ def start_device_login() -> Optional[Tuple[str, Optional[str]]]:
             _CACHED_SESSION = _create_session(tidalapi)
         session = _CACHED_SESSION
     _apply_client_overrides(session)
+    _purge_if_client_changed()
     if _load_session_into(session):
-        return None
+        if not _session_has_empty_scopes(session):
+            return None
+        _delete_saved_session_file()
     try:
         login = None
         future = None
         if hasattr(session, "login_oauth_device"):
-            login, future = session.login_oauth_device()
+            scopes = _scopes_for_tv_app(tidalapi)
+            try:
+                login, future = session.login_oauth_device(scopes=scopes)
+            except TypeError:
+                try:
+                    login, future = session.login_oauth_device(scopes)
+                except Exception:
+                    login, future = session.login_oauth_device()
         elif hasattr(session, "login_oauth"):
-            login, future = session.login_oauth()
+            scopes = _scopes_for_tv_app(tidalapi)
+            try:
+                login, future = session.login_oauth(scopes=scopes)
+            except TypeError:
+                try:
+                    login, future = session.login_oauth(scopes)
+                except Exception:
+                    login, future = session.login_oauth()
         else:
             return None
         uri_complete = getattr(login, "verification_uri_complete", None)
